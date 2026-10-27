@@ -1,0 +1,76 @@
+name: Build MagnoliaDroid ISO
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Build target'
+        required: true
+        default: 'iso_img'
+        type: choice
+        options:
+          - iso_img
+          - blissify
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 10240
+          swap-size-mb: 16384
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-core gnupg flex bison gperf build-essential zip curl zlib1g-dev \
+            gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses-dev x11proto-core-dev libx11-dev \
+            lib32z-dev ccache libgl1-mesa-dev libxml2-utils xsltproc unzip squashfs-tools python3-mako \
+            libssl-dev ninja-build lunzip syslinux syslinux-utils gettext genisoimage bc xorriso \
+            xmlstarlet meson glslang-tools git-lfs libncurses6 libelf-dev aapt zstd rdfind nasm
+
+      - name: Setup Repo tool
+        run: |
+          mkdir -p ~/.bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/.bin/repo
+          chmod a+rx ~/.bin/repo
+          echo "$HOME/.bin" >> $GITHUB_PATH
+
+      - name: Initialize MagnoliaDroid Manifest
+        run: |
+          git config --global user.name "MagnoliaDroid Bot"
+          git config --global user.email "bot@magnoliadroid.org"
+          repo init -u https://github.com/magnolia-droid/magnoliadroid.git -b main --depth=1
+
+      - name: Sync source repositories
+        run: |
+          repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc) --optimized-fetch --prune
+
+      - name: Integrate Magnolia Kernel & Vendor
+        run: |
+          echo "==> Pulling Magnolia Kernel patches..."
+          if [ -d "kernel/x86/common" ]; then
+            git clone --depth=1 https://github.com/magnolia-droid/magnolia-kernel.git /tmp/magnolia-kernel
+            /tmp/magnolia-kernel/scripts/apply_magnolia_patches.sh kernel/x86/common
+          fi
+
+          echo "==> Pulling Magnolia Vendor packages..."
+          git clone --depth=1 https://github.com/magnolia-droid/vendor_magnolia.git vendor/magnolia
+
+      - name: Build MagnoliaDroid ISO
+        run: |
+          source build/envsetup.sh
+          lunch bliss_x86_64-userdebug
+          m ${{ github.event.inputs.target }} -j$(nproc)
+
+      - name: Upload ISO Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MagnoliaDroid-ISO
+          path: out/target/product/x86_64/*.iso
